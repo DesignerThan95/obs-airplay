@@ -414,8 +414,17 @@ AirPlay::AirPlay(struct obs_data *obsData, struct obs_source *obsSource)
     obsVFrame(std::make_unique<obs_source_frame>()),
     obsAFrame(std::make_unique<obs_source_audio>())
 {
+  // Get settings from obs_data
+  const char* name_setting = obs_data_get_string(obsData, "server_name");
+  current_server_name = (name_setting && strlen(name_setting) > 0) ? name_setting : "OBS";
+  current_use_random_mac = obs_data_get_bool(obsData, "use_random_mac");
+  
+  // Initialize pending settings to current
+  pending_server_name = current_server_name;
+  pending_use_random_mac = current_use_random_mac;
+  settings_changed = false;
+  
   std::vector<char> server_hw_addr;
-  bool use_random_hw_addr = false;
   bool debug_log = DEFAULT_DEBUG_LOG;
   unsigned short tcp[3] = {0}, udp[3] = {0};
 
@@ -431,9 +440,9 @@ AirPlay::AirPlay(struct obs_data *obsData, struct obs_source *obsSource)
     LOG("using network ports UDP", udp[0], udp[1], udp[2], "TCP", tcp[0], tcp[1], tcp[2]);
 
   std::string mac_address;
-  if (!use_random_hw_addr)
+  if (!current_use_random_mac)
     mac_address = find_mac();
-  if (mac_address.empty())
+  if (mac_address.empty() || current_use_random_mac)
   {
     srand(time(NULL) * getpid());
     mac_address = random_mac();
@@ -448,13 +457,85 @@ AirPlay::AirPlay(struct obs_data *obsData, struct obs_source *obsSource)
 
   connections_stopped = true;
 
-  if (start_raop_server(server_hw_addr, server_name, tcp, udp, debug_log) != 0)
+  if (start_raop_server(server_hw_addr, current_server_name, tcp, udp, debug_log) != 0)
   {
     LOG("start_raop_server failed");
     return;
   }
   counter = 0;
   compression_type = 0;
+}
+
+auto AirPlay::update(struct obs_data *data) -> void
+{
+  const char* name_setting = obs_data_get_string(data, "server_name");
+  std::string new_server_name = (name_setting && strlen(name_setting) > 0) ? name_setting : "OBS";
+  bool new_use_random_mac = obs_data_get_bool(data, "use_random_mac");
+  
+  // Update pending settings
+  pending_server_name = new_server_name;
+  pending_use_random_mac = new_use_random_mac;
+  
+  // Only restart server immediately for MAC address changes (checkbox)
+  // Server name changes are stored but not applied until button is clicked
+  if (new_use_random_mac != current_use_random_mac)
+  {
+    LOG("MAC address setting changed, restarting server...");
+    restart_server_with_settings(current_server_name, new_use_random_mac);
+  }
+  
+  // Track if server name has changed
+  settings_changed = (pending_server_name != current_server_name);
+}
+
+auto AirPlay::restart_server_with_settings(const std::string& name, bool use_random_mac) -> void
+{
+  LOG("Restarting AirPlay server...");
+  
+  // Stop current server
+  stop_raop_server();
+  
+  // Update current settings
+  current_server_name = name;
+  current_use_random_mac = use_random_mac;
+  settings_changed = false;
+  
+  // Restart with new settings
+  std::vector<char> server_hw_addr;
+  bool debug_log = DEFAULT_DEBUG_LOG;
+  unsigned short tcp[3] = {0}, udp[3] = {0};
+  
+  std::string mac_address;
+  if (!current_use_random_mac)
+    mac_address = find_mac();
+  if (mac_address.empty() || current_use_random_mac)
+  {
+    srand(time(NULL) * getpid());
+    mac_address = random_mac();
+    LOG("using randomly-generated MAC address", mac_address);
+  }
+  else
+  {
+    LOG("using system MAC address", mac_address);
+  }
+  parse_hw_addr(mac_address, server_hw_addr);
+  
+  if (start_raop_server(server_hw_addr, current_server_name, tcp, udp, debug_log) != 0)
+  {
+    LOG("start_raop_server failed after settings update");
+  }
+}
+
+auto AirPlay::apply_settings() -> void
+{
+  if (!settings_changed)
+  {
+    LOG("No server name changes to apply");
+    return;
+  }
+    
+  LOG("Applying server name change...");
+  restart_server_with_settings(pending_server_name, current_use_random_mac);
 }
 
 auto AirPlay::render(const h264_decode_struct *pkt) -> void
