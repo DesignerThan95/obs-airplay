@@ -4,6 +4,7 @@
 #include <memory>
 #include <stream.h>
 #include <vector>
+#include <string>
 
 class AirPlay
 {
@@ -13,6 +14,8 @@ public:
   auto getWidth() const -> int;
   auto getHeight() const -> int;
   auto name() const -> const char *;
+  auto update(struct obs_data *data) -> void;
+  auto apply_settings() -> void;
 
 private:
   auto render(const audio_decode_struct *data) -> void;
@@ -22,8 +25,9 @@ private:
                          unsigned short tcp[3],
                          unsigned short udp[3],
                          bool debug_log) -> int;
-
   auto stop_raop_server() -> int;
+  auto restart_server_with_settings(const std::string& name, bool use_random_mac) -> void;
+
   // Server callbacks
   static auto audio_flush(void *cls) -> void;
   static auto audio_get_format(void *cls,
@@ -62,4 +66,11 @@ private:
   int open_connections = 0;
   int width = 100;
   int height = 100;
+  
+  // Settings for dynamic AirPlay Server name
+  std::string current_server_name;
+  bool current_use_random_mac;
+  std::string pending_server_name;
+  bool pending_use_random_mac;
+  bool settings_changed;
 };
